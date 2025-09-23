@@ -1,7 +1,7 @@
 # app.py
 import jmcomic
-from flask import Flask, request, abort, send_file
-import os
+from flask import Flask, request, abort, send_file,  jsonify
+import os, hmac
 import shutil
 import logging
 import threading
@@ -9,9 +9,12 @@ import threading
 import gc
 import psutil
 import tracemalloc
+from functools import wraps
 from dotenv import load_dotenv
 from pathlib import Path
 from dotenv import dotenv_values, set_key
+
+logging.basicConfig(level=logging.INFO)
 # 加载环境变量
 load_dotenv()
 
@@ -47,10 +50,32 @@ def configure_logging():
         ]
     )
 
+#密码配置校验
+def _get_admin_secret() -> str:
+    return os.getenv("ADMIN_SECRET", "")
+
+def _verify_admin_pwd() -> bool:
+    """常量时间比较，防计时攻击"""
+    secret = _get_admin_pwd()
+    if not secret:               # 没配密码就永远失败
+        return False
+    sent = request.json.get("secret", "") if request.is_json else ""
+    return hmac.compare_digest(sent.encode(), secret.encode())
+
+def _get_admin_pwd():
+    return _get_admin_secret()
+#定义一份装饰器
+def admin_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not _verify_admin_pwd():
+            abort(403)          # 403 比 401 更模糊，不暴露原因
+        return f(*args, **kwargs)
+    return wrapper
+
 # 路径获取函数(包含创建long与pdf文件夹)
 def update_jm_base_dir_in_env():
     env_path = Path('.env')
-
     # 读取已有内容（保留其他变量）
     env_vars = dotenv_values(env_path) if env_path.exists() else {}
 
@@ -65,7 +90,7 @@ def update_jm_base_dir_in_env():
     for key, value in env_vars.items():
         set_key(env_path, key, value)
 
-    print(f"已更新 .env 文件中的 JM_BASE_DIR 为: {current_dir}")
+    logging.info(f"已更新 .env 文件中的 JM_BASE_DIR 为: {current_dir}")
 
 
 
@@ -160,10 +185,12 @@ def get_pdf():
     return send_file(pdf_path, mimetype='application/pdf')
 
 @app.route('/cleanup', methods=['POST'])
+@admin_required
 def cleanup():
     """手动触发清理"""
     cleanup_folders()
-    return '清理完成'
+    return jsonify(msg="清理完成")
+
 
 @app.route('/memory', methods=['GET'])
 def memory_info():
@@ -179,10 +206,11 @@ def memory_info():
     }
 
 @app.route('/gc', methods=['POST'])
+@admin_required
 def trigger_gc():
     """手动触发垃圾回收"""
     collected = gc.collect()
-    return f'垃圾回收完成，释放了 {collected} 个对象'
+    return jsonify(msg=f"垃圾回收完成，释放了 {collected} 个对象")
 
 @app.route('/')
 def return_status():
@@ -192,9 +220,14 @@ def return_status():
 if __name__ == '__main__':
     update_jm_base_dir_in_env()
     logging.info("获取当前路径并写入...")
+
     configure_logging()
     logging.info("服务启动，执行首次清理...")
     cleanup_folders()
+
+    pswd = _get_admin_secret()
+    if pswd == 'password':
+        logging.warning('当前是默认密码，建议手动在.env文件中更改')
     
     # 启动内存监控线程
     monitor_thread = threading.Thread(target=memory_monitor, daemon=True)

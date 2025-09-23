@@ -1,4 +1,4 @@
-# JM Downloader By Python v0.0.1
+# JM Downloader By Python v0.0.2
 
 ## 前言
 
