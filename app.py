@@ -10,9 +10,8 @@ import gc
 import psutil
 import tracemalloc
 from functools import wraps
-from dotenv import load_dotenv
+from dotenv import load_dotenv, dotenv_values, set_key
 from pathlib import Path
-from dotenv import dotenv_values, set_key
 
 logging.basicConfig(level=logging.INFO)
 # 加载环境变量
@@ -23,8 +22,10 @@ app = Flask(__name__)
 
 # 全局配置
 JM_BASE_DIR = os.getenv('JM_BASE_DIR', 'C:/a/b/your/path')
-EXCLUDE_FOLDER = os.getenv('JM_EXCLUDE_FOLDER', 'long')
-EXCLUDE_FOLDER_PDF = os.getenv('JM_EXCLUDE_FOLDER_PDF', 'pdf')
+EXCLUDE_FOLDER =  os.getenv('JM_EXCLUDE_FOLDER', 'long'),
+EXCLUDE_FOLDER_PDF = os.getenv('JM_EXCLUDE_FOLDER_PDF', 'pdf'),
+EXCLUDE_FOLDER_GIT = os.getenv('JM_EXCLUDE_FOLDER_GIT', '.git')
+
 FLASK_HOST = os.getenv('FLASK_HOST', '0.0.0.0')
 FLASK_PORT = int(os.getenv('FLASK_PORT', '8000'))
 
@@ -103,12 +104,12 @@ def cleanup_folders():
 
     for item in os.listdir(JM_BASE_DIR):
         item_path = os.path.join(JM_BASE_DIR, item)
-        if os.path.isdir(item_path) and item not in [EXCLUDE_FOLDER, EXCLUDE_FOLDER_PDF]:
+        if os.path.isdir(item_path) and item not in [EXCLUDE_FOLDER, EXCLUDE_FOLDER_PDF, EXCLUDE_FOLDER_GIT]:
             try:
                 shutil.rmtree(item_path)
                 logging.info(f"已删除: {item_path}")
             except Exception as e:
-                logging.error(f"删除失败: {item_path} - {str(e)}")
+                logging.error(f"删除失败: {item_path} - {str(e)}") #不建议给你的脚本提权
 
 # 下载函数
 def download_album(jm_id):
@@ -218,8 +219,8 @@ def return_status():
 
 # 主程序
 if __name__ == '__main__':
-    update_jm_base_dir_in_env()
     logging.info("获取当前路径并写入...")
+    update_jm_base_dir_in_env()
 
     configure_logging()
     logging.info("服务启动，执行首次清理...")
@@ -236,6 +237,7 @@ if __name__ == '__main__':
     
     try:
         app.run(
+            threaded=True,
             host=FLASK_HOST,
             port=FLASK_PORT,
             debug=False,
