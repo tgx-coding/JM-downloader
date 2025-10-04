@@ -1,4 +1,4 @@
-# JM Downloader By Python v0.0.3
+# JM Downloader By Python v0.0.4
 
 ## 前言
 
@@ -27,16 +27,24 @@ pip install -r requirements.txt
 2. 然后执行
 `python app.py`
 
-3. 如果看到如下输出则证明运行成功:
+3. 如果看到类似如下输出则证明运行成功:
 
 ```
-已更新 .env 文件中的 JM_BASE_DIR 为: C:\your\path
+INFO:root:获取当前路径并写入...
+INFO:root:已更新 .env 文件中的 JM_BASE_DIR 为: /your/path
+INFO:root:服务启动，执行首次清理...
+INFO:root:已删除: your/path/long
+INFO:root:已删除: your/path/pdf
+WARNING:root:当前是默认密码，建议手动在.env文件中更改
+INFO:root:内存使用: 38.93 MB (0.12%)
+INFO:root:内存监控线程已启动
+INFO:root:定时重启线程已启动
  * Serving Flask app 'app'
  * Debug mode: off
 INFO:werkzeug:WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
  * Running on all addresses (0.0.0.0)
  * Running on http://127.0.0.1:8000
- * Running on http://192.168.2.4:8000
+ * Running on http://198.18.0.1:8000
 INFO:werkzeug:Press CTRL+C to quit
 ```
 

@@ -1,10 +1,12 @@
-# app.py
+# app.py v0.0.4
 import jmcomic
 from flask import Flask, request, abort, send_file,  jsonify
 import os, hmac
 import shutil
 import logging
 import threading
+import sys
+# import signal
 # import time
 import gc
 import psutil
@@ -50,6 +52,15 @@ def configure_logging():
             logging.StreamHandler()
         ]
     )
+
+# 定时重启函数
+def schedule_restart(interval_hours=24):
+    """每隔 interval_hours 小时自动重启"""
+    while not exit_evt.is_set():
+        if exit_evt.wait(interval_hours * 3600):
+            break
+        logging.info(f"到达定时任务（{interval_hours}h），准备重启 Flask...")
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
 #密码配置校验
 def _get_admin_secret() -> str:
@@ -185,13 +196,6 @@ def get_pdf():
 
     return send_file(pdf_path, mimetype='application/pdf')
 
-@app.route('/cleanup', methods=['POST'])
-@admin_required
-def cleanup():
-    """手动触发清理"""
-    cleanup_folders()
-    return jsonify(msg="清理完成")
-
 
 @app.route('/memory', methods=['GET'])
 def memory_info():
@@ -206,6 +210,15 @@ def memory_info():
         'percent': memory_percent
     }
 
+# 管理员需要用的路由，文件清理，停止服务器，内存清理
+@app.route('/cleanup', methods=['POST'])
+@admin_required
+def cleanup():
+    """手动触发清理"""
+    cleanup_folders()
+    return jsonify(msg="清理完成")
+
+
 @app.route('/gc', methods=['POST'])
 @admin_required
 def trigger_gc():
@@ -213,18 +226,41 @@ def trigger_gc():
     collected = gc.collect()
     return jsonify(msg=f"垃圾回收完成，释放了 {collected} 个对象")
 
+@app.route('/stop', methods=['POST'])
+@admin_required
+def stop_server():
+    """优雅停止 Flask 服务"""
+    exit_evt.set()  # 通知后台线程结束
+    logging.info("接收到停止请求，准备退出进程...")
+    shutdown_func = request.environ.get("werkzeug.server.shutdown")
+    if shutdown_func:
+        shutdown_func()
+    else:
+        # 如果不是 werkzeug server，直接强退
+        os._exit(0)
+    return jsonify(msg="服务正在关闭...")
+
 @app.route('/')
 def return_status():
     return 'api running!'
 
 # 主程序
 if __name__ == '__main__':
-    logging.info("获取当前路径并写入...")
-    update_jm_base_dir_in_env()
-
+    logging.info("    _____  __       __   ______    ______   __       __  ______   ______   __  __ ")
+    logging.info("   /     |/  \\     /  | /      \\  /      \\ /  \\     /  |/      | /      \\ /  |/  |")
+    logging.info("   $$$$$ |$$  \\   /$$ |/$$$$$$  |/$$$$$$  |$$  \\   /$$ |$$$$$$/ /$$$$$$  |$$ |$$ |")
+    logging.info("      $$ |$$$  \\ /$$$ |$$ |  $$/ $$ |  $$ |$$$  \\ /$$$ |  $$ |  $$ |  $$/ $$ |$$ |")
+    logging.info(" __   $$ |$$$$  /$$$$ |$$ |      $$ |  $$ |$$$$  /$$$$ |  $$ |  $$ |      $$ |$$ |")
+    logging.info("/  |  $$ |$$ $$ $$/$$ |$$ |   __ $$ |  $$ |$$ $$ $$/$$ |  $$ |  $$ |   __ $$/ $$/ ")
+    logging.info("$$ \\__$$ |$$ |$$$/ $$ |$$ \\__/  |$$ \\__$$ |$$ |$$$/ $$ | _$$ |_ $$ \\__/  | __  __ ")
+    logging.info("$$    $$/ $$ | $/  $$ |$$    $$/ $$    $$/ $$ | $/  $$ |/ $$   |$$    $$/ /  |/  |")
+    logging.info(" $$$$$$/  $$/      $$/  $$$$$$/   $$$$$$/  $$/      $$/ $$$$$$/  $$$$$$/  $$/ $$/ ")
     configure_logging()
     logging.info("服务启动，执行首次清理...")
     cleanup_folders()
+    logging.info("获取当前路径并写入...")
+    update_jm_base_dir_in_env()
+
 
     pswd = _get_admin_secret()
     if pswd == 'password':
@@ -234,7 +270,10 @@ if __name__ == '__main__':
     monitor_thread = threading.Thread(target=memory_monitor, daemon=True)
     monitor_thread.start()
     logging.info("内存监控线程已启动")
-    
+    # 启用定时重启
+    restart_thread = threading.Thread(target=schedule_restart, args=(24,), daemon=True)
+    restart_thread.start()
+    logging.info("定时重启线程已启动")
     try:
         app.run(
             threaded=True,
