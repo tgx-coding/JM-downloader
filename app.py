@@ -1,4 +1,4 @@
-# app.py v0.0.4
+# app.py v0.1.0
 import jmcomic
 from flask import Flask, request, abort, send_file,  jsonify
 import os, hmac
@@ -108,21 +108,25 @@ def update_jm_base_dir_in_env():
 
 # 文件夹清理函数
 def cleanup_folders():
-    """清理除指定文件夹外的所有目录"""
+    """清理除 long、pdf 及所有隐藏文件夹外的所有目录"""
     if not os.path.exists(JM_BASE_DIR):
         logging.warning(f"目录不存在: {JM_BASE_DIR}")
         return
 
+    exclude_folders = {"long", "pdf"}
+    # 允许所有以点开头的隐藏文件夹保留
     for item in os.listdir(JM_BASE_DIR):
         item_path = os.path.join(JM_BASE_DIR, item)
-        if os.path.isdir(item_path) and item not in [EXCLUDE_FOLDER, EXCLUDE_FOLDER_PDF, EXCLUDE_FOLDER_GIT]:
+        # 跳过 long、pdf、所有隐藏文件夹（.开头）
+        if os.path.isdir(item_path) and item not in exclude_folders and not item.startswith('.'):
             try:
                 shutil.rmtree(item_path)
                 logging.info(f"已删除: {item_path}")
             except Exception as e:
-                logging.error(f"删除失败: {item_path} - {str(e)}") #不建议给你的脚本提权
+                logging.error(f"删除失败: {item_path} - {str(e)}")
 
-# 下载函数
+
+# 单个下载
 def download_album(jm_id):
     """下载专辑并返回是否成功"""
     try:
@@ -132,6 +136,24 @@ def download_album(jm_id):
     except Exception as e:
         logging.error(f"下载失败: {str(e)}")
         return False
+
+# 多线程批量下载
+def download_album_multi(jm_ids):
+    """多线程下载多个专辑，返回 {jm_id: True/False} 字典"""
+    results = {}
+    threads = []
+
+    def worker(jm_id):
+        results[jm_id] = download_album(jm_id)
+
+    for jm_id in jm_ids:
+        t = threading.Thread(target=worker, args=(jm_id,))
+        t.start()
+        threads.append(t)
+
+    for t in threads:
+        t.join()
+    return results
 
 # 内存监控函数
 def memory_monitor():
@@ -162,39 +184,91 @@ def memory_monitor():
     logging.info("memory_monitor 线程正常结束")
 
 # 路由处理
+
+# 支持多 jm_id 下载
 @app.route('/jmd', methods=['GET'])
 def get_image():
-    jm_id = request.args.get('jm', type=int)
-    if not jm_id or jm_id <= 0:
-        abort(400, description="参数 jm 必须为正整数")
+    jm_param = request.args.get('jm')
+    if not jm_param:
+        abort(400, description="参数 jm 必须为正整数或逗号分隔的正整数")
 
-    image_path = os.path.join(IMAGE_FOLDER, f"{jm_id}.png")
+    # 支持逗号分隔
+    jm_ids = [s.strip() for s in jm_param.split(',') if s.strip()]
+    try:
+        jm_ids = [int(j) for j in jm_ids if int(j) > 0]
+    except Exception:
+        abort(400, description="参数 jm 必须为正整数或逗号分隔的正整数")
+    if not jm_ids:
+        abort(400, description="参数 jm 必须为正整数或逗号分隔的正整数")
 
-    if not os.path.exists(image_path):
-        if not download_album(jm_id):
-            abort(503, description="下载失败")
-        
+    # 多于1个则多线程
+    if len(jm_ids) == 1:
+        jm_id = jm_ids[0]
+        image_path = os.path.join(IMAGE_FOLDER, f"{jm_id}.png")
         if not os.path.exists(image_path):
-            abort(404, description="资源下载后仍未找到")
+            if not download_album(jm_id):
+                abort(503, description="下载失败")
+            if not os.path.exists(image_path):
+                abort(404, description="资源下载后仍未找到")
+        return send_file(image_path, mimetype='image/png')
+    else:
+        # 多线程批量下载
+        results = download_album_multi(jm_ids)
+        failed = [str(j) for j, ok in results.items() if not ok]
+        # 检查所有图片是否存在
+        missing = [str(j) for j in jm_ids if not os.path.exists(os.path.join(IMAGE_FOLDER, f"{j}.png"))]
+        if failed or missing:
+            abort(503, description=f"部分下载失败: {','.join(failed+missing)}")
+        # 返回所有图片路径列表
+        files = [os.path.join(IMAGE_FOLDER, f"{j}.png") for j in jm_ids]
+        # 打包为zip返回
+        import zipfile, io
+        mem_zip = io.BytesIO()
+        with zipfile.ZipFile(mem_zip, 'w') as zf:
+            for f in files:
+                zf.write(f, arcname=os.path.basename(f))
+        mem_zip.seek(0)
+        return send_file(mem_zip, mimetype='application/zip', as_attachment=True, download_name='images.zip')
 
-    return send_file(image_path, mimetype='image/png')
 
+# 支持多 jm_id 下载 PDF
 @app.route('/jmdp', methods=['GET'])
 def get_pdf():
-    jm_id = request.args.get('jm', type=int)
-    if not jm_id or jm_id <= 0:
-        abort(400, description="参数 jm 必须为正整数")
+    jm_param = request.args.get('jm')
+    if not jm_param:
+        abort(400, description="参数 jm 必须为正整数或逗号分隔的正整数")
 
-    pdf_path = os.path.join(PDF_FOLDER, f"{jm_id}.pdf")
+    jm_ids = [s.strip() for s in jm_param.split(',') if s.strip()]
+    try:
+        jm_ids = [int(j) for j in jm_ids if int(j) > 0]
+    except Exception:
+        abort(400, description="参数 jm 必须为正整数或逗号分隔的正整数")
+    if not jm_ids:
+        abort(400, description="参数 jm 必须为正整数或逗号分隔的正整数")
 
-    if not os.path.exists(pdf_path):
-        if not download_album(jm_id):
-            abort(503, description="下载失败")
-        
+    if len(jm_ids) == 1:
+        jm_id = jm_ids[0]
+        pdf_path = os.path.join(PDF_FOLDER, f"{jm_id}.pdf")
         if not os.path.exists(pdf_path):
-            abort(404, description="资源下载后仍未找到")
-
-    return send_file(pdf_path, mimetype='application/pdf')
+            if not download_album(jm_id):
+                abort(503, description="下载失败")
+            if not os.path.exists(pdf_path):
+                abort(404, description="资源下载后仍未找到")
+        return send_file(pdf_path, mimetype='application/pdf')
+    else:
+        results = download_album_multi(jm_ids)
+        failed = [str(j) for j, ok in results.items() if not ok]
+        missing = [str(j) for j in jm_ids if not os.path.exists(os.path.join(PDF_FOLDER, f"{j}.pdf"))]
+        if failed or missing:
+            abort(503, description=f"部分下载失败: {','.join(failed+missing)}")
+        files = [os.path.join(PDF_FOLDER, f"{j}.pdf") for j in jm_ids]
+        import zipfile, io
+        mem_zip = io.BytesIO()
+        with zipfile.ZipFile(mem_zip, 'w') as zf:
+            for f in files:
+                zf.write(f, arcname=os.path.basename(f))
+        mem_zip.seek(0)
+        return send_file(mem_zip, mimetype='application/zip', as_attachment=True, download_name='pdfs.zip')
 
 
 @app.route('/memory', methods=['GET'])
@@ -255,14 +329,15 @@ if __name__ == '__main__':
     logging.info("$$ \\__$$ |$$ |$$$/ $$ |$$ \\__/  |$$ \\__$$ |$$ |$$$/ $$ | _$$ |_ $$ \\__/  | __  __ ")
     logging.info("$$    $$/ $$ | $/  $$ |$$    $$/ $$    $$/ $$ | $/  $$ |/ $$   |$$    $$/ /  |/  |")
     logging.info(" $$$$$$/  $$/      $$/  $$$$$$/   $$$$$$/  $$/      $$/ $$$$$$/  $$$$$$/  $$/ $$/ ")
-    configure_logging()
-    logging.info("服务启动，执行首次清理...")
-    cleanup_folders()
+    # logging.info("JM Downloader By Python v0.0.4")
+    logging.info("JM Downloader By Python v0.1.0")
+    configure_logging() # 配置日志
     logging.info("获取当前路径并写入...")
-    update_jm_base_dir_in_env()
-
-
-    pswd = _get_admin_secret()
+    update_jm_base_dir_in_env() # 更新路径
+    logging.info("服务启动，执行首次清理...")
+    cleanup_folders() # 启动时清理
+    logging.info("检查密码配置...")
+    pswd = _get_admin_secret() # 检查密码
     if pswd == 'password':
         logging.warning('当前是默认密码，建议手动在.env文件中更改')
     
