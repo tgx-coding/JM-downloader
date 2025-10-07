@@ -1,4 +1,4 @@
-# app.py v0.1.0
+# app.py v0.1.1
 import jmcomic
 from flask import Flask, request, abort, send_file,  jsonify
 import os, hmac
@@ -94,9 +94,15 @@ def update_jm_base_dir_in_env():
     # 更新 JM_BASE_DIR 为当前工作目录
     current_dir = Path.cwd().resolve()
     env_vars['JM_BASE_DIR'] = str(current_dir)
-    # 主动创建两个目录
-    os.makedirs('long', exist_ok=True)
-    os.makedirs('pdf', exist_ok=True)
+    # 主动创建两个目录（基于当前工作目录）
+    os.makedirs(current_dir / 'long', exist_ok=True)
+    os.makedirs(current_dir / 'pdf', exist_ok=True)
+
+    # 更新运行时的全局变量，保证后续代码使用正确路径
+    global JM_BASE_DIR, IMAGE_FOLDER, PDF_FOLDER
+    JM_BASE_DIR = str(current_dir)
+    IMAGE_FOLDER = os.path.join(JM_BASE_DIR, 'long')
+    PDF_FOLDER = os.path.join(JM_BASE_DIR, 'pdf')
 
     # 写回 .env 文件
     for key, value in env_vars.items():
@@ -212,14 +218,20 @@ def get_image():
                 abort(404, description="资源下载后仍未找到")
         return send_file(image_path, mimetype='image/png')
     else:
-        # 多线程批量下载
-        results = download_album_multi(jm_ids)
-        failed = [str(j) for j, ok in results.items() if not ok]
-        # 检查所有图片是否存在
+        # 只下载 long 文件夹中不存在的 jm_id，已存在的跳过
+        to_download = [j for j in jm_ids if not os.path.exists(os.path.join(IMAGE_FOLDER, f"{j}.png"))]
+        results = {}
+        failed = []
+        if to_download:
+            results = download_album_multi(to_download)
+            failed = [str(j) for j, ok in results.items() if not ok]
+
+        # 检查所有图片是否存在（包含之前已存在和刚下载的）
         missing = [str(j) for j in jm_ids if not os.path.exists(os.path.join(IMAGE_FOLDER, f"{j}.png"))]
         if failed or missing:
             abort(503, description=f"部分下载失败: {','.join(failed+missing)}")
-        # 返回所有图片路径列表
+
+        # 返回所有图片路径列表（所有 jm_id 均应存在）
         files = [os.path.join(IMAGE_FOLDER, f"{j}.png") for j in jm_ids]
         # 打包为zip返回
         import zipfile, io
@@ -256,11 +268,19 @@ def get_pdf():
                 abort(404, description="资源下载后仍未找到")
         return send_file(pdf_path, mimetype='application/pdf')
     else:
-        results = download_album_multi(jm_ids)
-        failed = [str(j) for j, ok in results.items() if not ok]
+        # 只下载 pdf 文件夹中不存在的 jm_id，已存在的跳过
+        to_download = [j for j in jm_ids if not os.path.exists(os.path.join(PDF_FOLDER, f"{j}.pdf"))]
+        results = {}
+        failed = []
+        if to_download:
+            results = download_album_multi(to_download)
+            failed = [str(j) for j, ok in results.items() if not ok]
+
+        # 检查所有 pdf 是否存在（包含之前已存在和刚下载的）
         missing = [str(j) for j in jm_ids if not os.path.exists(os.path.join(PDF_FOLDER, f"{j}.pdf"))]
         if failed or missing:
             abort(503, description=f"部分下载失败: {','.join(failed+missing)}")
+
         files = [os.path.join(PDF_FOLDER, f"{j}.pdf") for j in jm_ids]
         import zipfile, io
         mem_zip = io.BytesIO()
@@ -329,8 +349,8 @@ if __name__ == '__main__':
     logging.info("$$ \\__$$ |$$ |$$$/ $$ |$$ \\__/  |$$ \\__$$ |$$ |$$$/ $$ | _$$ |_ $$ \\__/  | __  __ ")
     logging.info("$$    $$/ $$ | $/  $$ |$$    $$/ $$    $$/ $$ | $/  $$ |/ $$   |$$    $$/ /  |/  |")
     logging.info(" $$$$$$/  $$/      $$/  $$$$$$/   $$$$$$/  $$/      $$/ $$$$$$/  $$$$$$/  $$/ $$/ ")
-    # logging.info("JM Downloader By Python v0.0.4")
-    logging.info("JM Downloader By Python v0.1.0")
+    # logging.info("JM Downloader By Python v0.1.0")
+    logging.info("JM Downloader By Python v0.1.1")
     configure_logging() # 配置日志
     logging.info("获取当前路径并写入...")
     update_jm_base_dir_in_env() # 更新路径
